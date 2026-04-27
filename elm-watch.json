@@ -1,0 +1,12 @@
+{
+    "serve": "./public/",
+    "port": 8003,
+    "targets": {
+        "mor": {
+            "inputs": [
+                "src/Main.elm"
+            ],
+            "output": "temp/main.js"
+        }
+    }
+}
