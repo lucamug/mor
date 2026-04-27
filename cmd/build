@@ -1,0 +1,9 @@
+#!/bin/bash
+set -eu
+
+FOLDER_DIST="build"
+rm -rf $FOLDER_DIST
+mkdir -p $FOLDER_DIST
+npx elm make src/Main.elm --output=$FOLDER_DIST/main.js --optimize
+cp public/index.html $FOLDER_DIST
+cp public/map.svg $FOLDER_DIST
