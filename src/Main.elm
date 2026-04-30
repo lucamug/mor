@@ -723,7 +723,7 @@ footer =
         -- , htmlAttribute <| Html.Attributes.style "text-shadow" "0px 0px 0 brown"
         , htmlAttribute <| Html.Attributes.style "pointer-events" "none"
         ]
-        [ text "Elm Training Material"
+        [ text "Map of Rock"
         ]
 
 
