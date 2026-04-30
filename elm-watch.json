@@ -1,6 +1,6 @@
 {
     "serve": "./public/",
-    "port": 8003,
+    "port": 8004,
     "targets": {
         "mor": {
             "inputs": [

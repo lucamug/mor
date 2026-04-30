@@ -1,0 +1,76 @@
+#!/usr/bin/env node
+// Builds the Elm app, serves it, takes a screenshot, and opens it.
+// Usage: node cmd/snapshot [url]   (default: http://localhost:8004)
+
+const { chromium } = require('playwright');
+const { execSync, spawn } = require('child_process');
+const path = require('path');
+const fs = require('fs');
+const http = require('http');
+const os = require('os');
+
+const ROOT = path.resolve(__dirname, '..');
+const BUILD_DIR = path.join(ROOT, 'build');
+const SCREENSHOT = path.join(os.tmpdir(), 'mor-snapshot.png');
+const TARGET_URL = process.argv[2] || null;
+
+async function waitForPort(port, timeout = 10000) {
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+        try {
+            await new Promise((res, rej) => {
+                const req = http.get(`http://localhost:${port}`, res);
+                req.on('error', rej);
+            });
+            return;
+        } catch {
+            await new Promise(r => setTimeout(r, 200));
+        }
+    }
+    throw new Error(`Port ${port} not ready after ${timeout}ms`);
+}
+
+(async () => {
+    let server = null;
+    let url = TARGET_URL;
+
+    if (!url) {
+        // Build the app
+        console.log('Building...');
+        execSync('bash cmd/build', { cwd: ROOT, stdio: 'inherit' });
+
+        // Serve build/
+        const { createServer } = require('http');
+        const mime = { '.html': 'text/html', '.js': 'application/javascript', '.svg': 'image/svg+xml', '.png': 'image/png' };
+        server = createServer((req, res) => {
+            let filePath = path.join(BUILD_DIR, req.url === '/' ? 'index.html' : req.url);
+            const ext = path.extname(filePath);
+            try {
+                const data = fs.readFileSync(filePath);
+                res.writeHead(200, { 'Content-Type': mime[ext] || 'application/octet-stream' });
+                res.end(data);
+            } catch {
+                res.writeHead(404); res.end();
+            }
+        });
+        const PORT = 9999;
+        server.listen(PORT);
+        await waitForPort(PORT);
+        url = `http://localhost:${PORT}`;
+    }
+
+    console.log(`Snapshotting ${url} ...`);
+    const browser = await chromium.launch();
+    const page = await browser.newPage();
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.goto(url, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: SCREENSHOT, fullPage: false });
+    await browser.close();
+    if (server) server.close();
+
+    console.log(`Screenshot saved: ${SCREENSHOT}`);
+    // Open the image
+    const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+    spawn(opener, [SCREENSHOT], { detached: true, stdio: 'ignore' }).unref();
+})();
