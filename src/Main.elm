@@ -581,7 +581,7 @@ footer =
         , htmlAttribute <| Html.Attributes.style "-webkit-text-stroke" "2px brown"
         , htmlAttribute <| Html.Attributes.style "pointer-events" "none"
         ]
-        [ text "Elm Training Material"
+        [ text "Map of Rock"
         ]
 
 
