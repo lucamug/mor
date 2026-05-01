@@ -22,7 +22,6 @@ type alias Model =
     , panX : Float
     , panY : Float
     , dragging : Bool
-    , svgWidth : Float
     , velX : Float
     , velY : Float
     , lastTouchX : Float
@@ -30,12 +29,16 @@ type alias Model =
     , lastPinchDist : Maybe Float
     , mouseX : Float
     , mouseY : Float
-    , svgHeight : Float
     , showLabelDots : Bool
+
+    -- Label calibration: adjust these to align HTML labels to the SVG map.
+    -- calibX/Y shift all labels; calibScaleX/Y stretch/compress spacing.
     , calibX : Float
     , calibY : Float
     , calibScaleX : Float
     , calibScaleY : Float
+
+    -- Viewport size, updated on init and window resize.
     , containerW : Float
     , containerH : Float
     }
@@ -47,7 +50,6 @@ init _ =
       , panX = 0
       , panY = 0
       , dragging = False
-      , svgWidth = 800
       , velX = 0
       , velY = 0
       , lastTouchX = 0
@@ -55,7 +57,6 @@ init _ =
       , lastPinchDist = Nothing
       , mouseX = 0
       , mouseY = 0
-      , svgHeight = 600
       , showLabelDots = False
       , calibX = -35
       , calibY = -78.5
@@ -137,8 +138,8 @@ update msg model =
         GoJA ->
             ( ja model, Cmd.none )
 
-        DragStart w ->
-            ( { model | dragging = True, svgWidth = w, velX = 0, velY = 0 }, Cmd.none )
+        DragStart _ ->
+            ( { model | dragging = True, velX = 0, velY = 0 }, Cmd.none )
 
         DragEnd ->
             ( { model | dragging = False }, Cmd.none )
@@ -203,47 +204,16 @@ update msg model =
 
         MouseMove clientX clientY w h ->
             let
-                scale =
-                    2 ^ model.zoom
-
-                mapAspect =
-                    2000 / 1280
-
-                containerAspect =
-                    if h > 0 then
-                        w / h
-
-                    else
-                        mapAspect
-
-                ( zoomedWidth, zoomedHeight ) =
-                    if containerAspect < mapAspect then
-                        let
-                            zh =
-                                1280 / scale
-                        in
-                        ( zh * containerAspect, zh )
-
-                    else
-                        let
-                            zw =
-                                2000 / scale
-                        in
-                        ( zw, zw / containerAspect )
-
-                offsetX =
-                    (2000 - zoomedWidth) / 2 + model.panX / scale
-
-                offsetY =
-                    (1280 - zoomedHeight) / 2 + model.panY / scale
+                vp =
+                    viewportGeometry { zoom = model.zoom, panX = model.panX, panY = model.panY, containerW = w, containerH = h }
 
                 svgX =
-                    offsetX + (clientX / w) * zoomedWidth
+                    vp.offsetX + (clientX / w) * vp.zoomedWidth
 
                 svgY =
-                    offsetY + (clientY / h) * zoomedHeight
+                    vp.offsetY + (clientY / h) * vp.zoomedHeight
             in
-            ( { model | mouseX = svgX, mouseY = svgY, svgWidth = w }, Cmd.none )
+            ( { model | mouseX = svgX, mouseY = svgY }, Cmd.none )
 
         ZoomSlider newZoom ->
             let
@@ -252,13 +222,13 @@ update msg model =
             in
             ( { model | zoom = newZoom, panX = model.panX * factor, panY = model.panY * factor }, Cmd.none )
 
-        TouchStart w x y maybeSecond ->
+        TouchStart _ x y maybeSecond ->
             let
                 pinchDist =
                     maybeSecond
                         |> Maybe.map (\( x2, y2 ) -> sqrt ((x2 - x) ^ 2 + (y2 - y) ^ 2))
             in
-            ( { model | dragging = True, svgWidth = w, lastTouchX = x, lastTouchY = y, velX = 0, velY = 0, lastPinchDist = pinchDist }, Cmd.none )
+            ( { model | dragging = True, lastTouchX = x, lastTouchY = y, velX = 0, velY = 0, lastPinchDist = pinchDist }, Cmd.none )
 
         TouchMove x y maybeSecond ->
             if model.dragging then
@@ -358,6 +328,18 @@ attrsButton =
 
 view : Model -> Html Msg
 view model =
+    let
+        ctx =
+            mapContext model
+
+        calib =
+            calibration model
+
+        overlays =
+            viewCursorLabel model
+                :: List.map (viewLabel ctx model.showLabelDots calib) labels
+                ++ List.map (viewCard ctx calib) cards
+    in
     layout [ height fill ] <|
         column
             [ width fill
@@ -367,31 +349,27 @@ view model =
             , inFront <| header model
             , inFront <| footer
             ]
-            [ el [ width fill, height fill ] <|
-                html <|
-                    Html.div
-                        [ Html.Attributes.style "cursor"
-                            (if model.dragging then
-                                "grabbing"
+            [ el
+                ([ width fill
+                 , height fill
+                 , htmlAttribute <|
+                    Html.Attributes.style "cursor"
+                        (if model.dragging then
+                            "grabbing"
 
-                             else
-                                "grab"
-                            )
-                        , Html.Attributes.style "width" "100%"
-                        , Html.Attributes.style "height" "100%"
-                        , Html.Attributes.style "position" "relative"
-                        , Html.Attributes.style "touch-action" "none"
-                        , Html.Events.on "mousedown" dragStartDecoder
-                        , Html.Events.on "mousemove" mouseMoveDecoder
-                        , Html.Events.on "touchstart" touchStartDecoder
-                        , Html.Events.on "touchmove" touchMoveDecoder
-                        , Html.Events.on "touchend" (Decode.succeed TouchEnd)
-                        ]
-                        (svg model.zoom model.panX model.panY model.containerW model.containerH
-                            :: viewCursorLabel model
-                            :: List.map (viewLabel model.zoom model.panX model.panY model.showLabelDots model.calibX model.calibY model.calibScaleX model.calibScaleY model.containerW model.containerH) labels
-                            ++ List.map (viewCard model.zoom model.panX model.panY model.containerW model.containerH model.calibX model.calibY model.calibScaleX model.calibScaleY) cards
+                         else
+                            "grab"
                         )
+                 , htmlAttribute <| Html.Attributes.style "touch-action" "none"
+                 , htmlAttribute <| Html.Events.on "mousedown" dragStartDecoder
+                 , htmlAttribute <| Html.Events.on "mousemove" mouseMoveDecoder
+                 , htmlAttribute <| Html.Events.on "touchstart" touchStartDecoder
+                 , htmlAttribute <| Html.Events.on "touchmove" touchMoveDecoder
+                 , htmlAttribute <| Html.Events.on "touchend" (Decode.succeed TouchEnd)
+                 ]
+                    ++ List.map inFront overlays
+                )
+                (html <| svg ctx)
             ]
 
 
@@ -433,188 +411,109 @@ cards =
       , description = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. In et dolor porta, tristique orci at, tempus nibh. Ut ac gravida turpis."
       , minZoom = 2
       }
+    , { lat = 41.5
+      , lng = -2
+      , title = "Card 2"
+      , description = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. In et dolor porta, tristique orci at, tempus nibh. Ut ac gravida turpis."
+      , minZoom = 2.2
+      }
+    , { lat = 45
+      , lng = 1
+      , title = "Card 3"
+      , description = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. In et dolor porta, tristique orci at, tempus nibh. Ut ac gravida turpis."
+      , minZoom = 2.4
+      }
+    , { lat = 47
+      , lng = 7
+      , title = "Card 3"
+      , description = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. In et dolor porta, tristique orci at, tempus nibh. Ut ac gravida turpis."
+      , minZoom = 2.6
+      }
     ]
 
 
-viewCard : Float -> Float -> Float -> Float -> Float -> Float -> Float -> Float -> Float -> Card -> Html.Html msg
-viewCard zoom panX panY containerW containerH calibX calibY calibScaleX calibScaleY card =
-    if zoom < card.minZoom then
-        Html.text ""
-
-    else
-        let
-            baseWidth =
-                2000
-
-            baseHeight =
-                1280
-
-            scale =
-                2 ^ zoom
-
-            mapAspect =
-                baseWidth / baseHeight
-
-            containerAspect =
-                if containerH > 0 then
-                    containerW / containerH
-
-                else
-                    mapAspect
-
-            ( zoomedWidth, zoomedHeight ) =
-                if containerAspect < mapAspect then
-                    let
-                        h =
-                            baseHeight / scale
-                    in
-                    ( h * containerAspect, h )
-
-                else
-                    let
-                        w =
-                            baseWidth / scale
-                    in
-                    ( w, w / containerAspect )
-
-            offsetX =
-                (baseWidth - zoomedWidth) / 2 + panX / scale
-
-            offsetY =
-                (baseHeight - zoomedHeight) / 2 + panY / scale
-
-            svgX =
-                ((card.lng + 180) * (baseWidth / 360) - baseWidth / 2) * calibScaleX + baseWidth / 2 + calibX
-
-            latRad =
-                card.lat * pi / 180
-
-            mercY =
-                logBase e (tan (pi / 4 + latRad / 2))
-
-            svgY =
-                (baseWidth / 2 * (1 - mercY / pi) - baseHeight / 2) * calibScaleY + baseHeight / 2 + calibY
-
-            pctX =
-                (svgX - offsetX) / zoomedWidth * 100
-
-            pctY =
-                (svgY - offsetY) / zoomedHeight * 100
-        in
-        Html.div
-            [ Html.Attributes.style "position" "absolute"
-            , Html.Attributes.style "left" (String.fromFloat pctX ++ "%")
-            , Html.Attributes.style "top" (String.fromFloat pctY ++ "%")
-            , Html.Attributes.style "transform" "translate(-50%, calc(-100% - 18px))"
-
-            -- , Html.Attributes.style "pointer-events" "none"
-            , Html.Attributes.style "width" "180px"
-            ]
-            [ layoutWith { options = [ noStaticStyleSheet ] }
-                -- [ htmlAttribute <| Html.Attributes.style "pointer-events" "none"
-                []
-                (column
-                    [ width fill
-                    , Border.width 2
-                    , Border.color (rgb255 51 51 51)
-                    , Border.rounded 10
-                    , Border.shadow { offset = ( 3, 3 ), size = 0, blur = 0, color = rgb255 51 51 51 }
-                    , Background.color (rgb 1 1 1)
-                    , padding 10
-                    , spacing 4
-                    ]
-                    [ el [ Font.bold, Font.size 14 ] (text card.title)
-                    , paragraph [ Font.size 12, Font.color (rgb255 68 68 68) ] [ text card.description ]
-                    ]
-                )
-            , Html.div
-                [ Html.Attributes.style "width" "0"
-                , Html.Attributes.style "height" "0"
-                , Html.Attributes.style "border-left" "10px solid transparent"
-                , Html.Attributes.style "border-right" "10px solid transparent"
-                , Html.Attributes.style "border-top" "12px solid #333"
-                , Html.Attributes.style "margin-left" "calc(50% - 10px)"
-                ]
-                []
-            , Html.div
-                [ Html.Attributes.style "width" "0"
-                , Html.Attributes.style "height" "0"
-                , Html.Attributes.style "border-left" "8px solid transparent"
-                , Html.Attributes.style "border-right" "8px solid transparent"
-                , Html.Attributes.style "border-top" "10px solid white"
-                , Html.Attributes.style "margin-left" "calc(50% - 8px)"
-                , Html.Attributes.style "margin-top" "-13px"
-                ]
-                []
-            ]
+type alias ViewportGeometry =
+    { zoomedWidth : Float
+    , zoomedHeight : Float
+    , offsetX : Float
+    , offsetY : Float
+    }
 
 
-viewCursorLabel : Model -> Html.Html msg
-viewCursorLabel model =
+type alias MapContext =
+    { zoom : Float
+    , panX : Float
+    , panY : Float
+    , containerW : Float
+    , containerH : Float
+    }
+
+
+type alias Calibration =
+    { x : Float
+    , y : Float
+    , scaleX : Float
+    , scaleY : Float
+    }
+
+
+type alias SliderConfig =
+    { label : String
+    , min : Float
+    , max : Float
+    , value : Float
+    , onChange : Float -> Msg
+    }
+
+
+
+-- Computes the visible SVG rect for the current zoom/pan and container size.
+-- Portrait containers fill by height and crop left/right; landscape fills by width.
+
+
+viewportGeometry : MapContext -> ViewportGeometry
+viewportGeometry ctx =
     let
         scale =
-            2 ^ model.zoom
+            2 ^ ctx.zoom
 
-        mapAspect =
-            2000 / 1280
-
-        containerAspect =
-            if model.containerH > 0 then
-                model.containerW / model.containerH
+        aspect =
+            if ctx.containerH > 0 then
+                ctx.containerW / ctx.containerH
 
             else
-                mapAspect
+                2000 / 1280
 
-        ( zoomedWidth, zoomedHeight ) =
-            if containerAspect < mapAspect then
+        ( zw, zh ) =
+            if aspect < 2000 / 1280 then
                 let
                     h =
                         1280 / scale
                 in
-                ( h * containerAspect, h )
+                ( h * aspect, h )
 
             else
                 let
                     w =
                         2000 / scale
                 in
-                ( w, w / containerAspect )
-
-        offsetX =
-            (2000 - zoomedWidth) / 2 + model.panX / scale
-
-        offsetY =
-            (1280 - zoomedHeight) / 2 + model.panY / scale
-
-        pctX =
-            (model.mouseX - offsetX) / zoomedWidth * 100
-
-        pctY =
-            (model.mouseY - offsetY) / zoomedHeight * 100
-
-        labelText =
-            "(" ++ String.fromInt (round model.mouseX) ++ ", " ++ String.fromInt (round model.mouseY) ++ ")"
+                ( w, w / aspect )
     in
-    Html.div
-        [ Html.Attributes.style "position" "absolute"
-        , Html.Attributes.style "left" (String.fromFloat pctX ++ "%")
-        , Html.Attributes.style "top" (String.fromFloat pctY ++ "%")
-        , Html.Attributes.style "transform" "translate(12px, -50%)"
-
-        -- , Html.Attributes.style "pointer-events" "none"
-        , Html.Attributes.style "color" "black"
-        , Html.Attributes.style "font-size" "11px"
-        , Html.Attributes.style "font-family" "monospace"
-        , Html.Attributes.style "white-space" "nowrap"
-        , Html.Attributes.style "background" "rgba(255,255,255,0.75)"
-        , Html.Attributes.style "padding" "1px 4px"
-        , Html.Attributes.style "border-radius" "3px"
-        ]
-        [ Html.text labelText ]
+    { zoomedWidth = zw
+    , zoomedHeight = zh
+    , offsetX = (2000 - zw) / 2 + ctx.panX / scale
+    , offsetY = (1280 - zh) / 2 + ctx.panY / scale
+    }
 
 
-viewLabel : Float -> Float -> Float -> Bool -> Float -> Float -> Float -> Float -> Float -> Float -> Label -> Html.Html msg
-viewLabel zoom panX panY showDots calibX calibY calibScaleX calibScaleY containerWidth containerHeight label =
+
+-- Converts lat/lng to SVG coordinates using Web Mercator projection,
+-- then applies the calibration offsets so labels align with the SVG map.
+-- The SVG is the top 1280px of a 2000×2000 Mercator tile (south pole cropped).
+
+
+latLngToSvgXY : Float -> Float -> Calibration -> ( Float, Float )
+latLngToSvgXY lat lng calib =
     let
         baseWidth =
             2000
@@ -622,90 +521,176 @@ viewLabel zoom panX panY showDots calibX calibY calibScaleX calibScaleY containe
         baseHeight =
             1280
 
-        scale =
-            2 ^ zoom
-
-        mapAspect =
-            baseWidth / baseHeight
-
-        containerAspect =
-            if containerHeight > 0 then
-                containerWidth / containerHeight
-
-            else
-                mapAspect
-
-        ( zoomedWidth, zoomedHeight ) =
-            if containerAspect < mapAspect then
-                let
-                    h =
-                        baseHeight / scale
-                in
-                ( h * containerAspect, h )
-
-            else
-                let
-                    w =
-                        baseWidth / scale
-                in
-                ( w, w / containerAspect )
-
-        offsetX =
-            (baseWidth - zoomedWidth) / 2 + panX / scale
-
-        offsetY =
-            (baseHeight - zoomedHeight) / 2 + panY / scale
-
-        svgX =
-            ((label.lng + 180) * (baseWidth / 360) - baseWidth / 2) * calibScaleX + baseWidth / 2 + calibX
+        rawX =
+            (lng + 180) * (baseWidth / 360)
 
         latRad =
-            label.lat * pi / 180
+            lat * pi / 180
 
         mercY =
             logBase e (tan (pi / 4 + latRad / 2))
 
-        svgY =
-            (baseWidth / 2 * (1 - mercY / pi) - baseHeight / 2) * calibScaleY + baseHeight / 2 + calibY
+        rawY =
+            baseWidth / 2 * (1 - mercY / pi)
 
-        pctX =
-            (svgX - offsetX) / zoomedWidth * 100
+        x =
+            (rawX - baseWidth / 2) * calib.scaleX + baseWidth / 2 + calib.x
 
-        pctY =
-            (svgY - offsetY) / zoomedHeight * 100
+        y =
+            (rawY - baseHeight / 2) * calib.scaleY + baseHeight / 2 + calib.y
     in
-    if showDots then
-        Html.div
-            [ Html.Attributes.style "position" "absolute"
-            , Html.Attributes.style "left" (String.fromFloat pctX ++ "%")
-            , Html.Attributes.style "top" (String.fromFloat pctY ++ "%")
-            , Html.Attributes.style "transform" "translate(-50%, -50%)"
+    ( x, y )
 
-            -- , Html.Attributes.style "pointer-events" "none"
-            , Html.Attributes.style "width" "6px"
-            , Html.Attributes.style "height" "6px"
-            , Html.Attributes.style "border-radius" "50%"
-            , Html.Attributes.style "background" "red"
-            ]
-            []
+
+viewCard : MapContext -> Calibration -> Card -> Element msg
+viewCard ctx calib card =
+    if ctx.zoom < card.minZoom then
+        none
 
     else
-        Html.div
-            [ Html.Attributes.style "position" "absolute"
-            , Html.Attributes.style "left" (String.fromFloat pctX ++ "%")
-            , Html.Attributes.style "top" (String.fromFloat pctY ++ "%")
-            , Html.Attributes.style "transform" "translate(-50%, -50%)"
+        let
+            vp =
+                viewportGeometry ctx
 
-            -- , Html.Attributes.style "pointer-events" "none"
-            , Html.Attributes.style "color" "black"
-            , Html.Attributes.style "font-size" "12px"
-            , Html.Attributes.style "font-weight" "bold"
-            , Html.Attributes.style "white-space" "nowrap"
-            , Html.Attributes.style "text-shadow" "0 0 3px white, 0 0 3px white, 0 0 3px white"
+            ( svgX, svgY ) =
+                latLngToSvgXY card.lat card.lng calib
+
+            pctX =
+                (svgX - vp.offsetX) / vp.zoomedWidth * 100
+
+            pctY =
+                (svgY - vp.offsetY) / vp.zoomedHeight * 100
+        in
+        column
+            [ htmlAttribute <| Html.Attributes.style "position" "absolute"
+            , htmlAttribute <| Html.Attributes.style "left" (String.fromFloat pctX ++ "%")
+            , htmlAttribute <| Html.Attributes.style "top" (String.fromFloat pctY ++ "%")
+            , htmlAttribute <| Html.Attributes.style "transform" "translate(-50%, calc(-100% - 18px))"
+            , htmlAttribute <| Html.Attributes.style "width" "180px"
+            , htmlAttribute <| Html.Attributes.style "pointer-events" "none"
             ]
-            [ Html.text label.content ]
+            [ column
+                [ width fill
+                , Border.width 2
+                , Border.color (rgb255 51 51 51)
+                , Border.rounded 10
+                , Border.shadow { offset = ( 3, 3 ), size = 0, blur = 0, color = rgb255 51 51 51 }
+                , Background.color (rgb 1 1 1)
+                , padding 10
+                , spacing 4
+                ]
+                [ el [ Font.bold, Font.size 14 ] (text card.title)
+                , paragraph [ Font.size 12, Font.color (rgb255 68 68 68) ] [ text card.description ]
+                ]
+
+            -- Speech bubble tail: two overlapping CSS triangles (border trick).
+            -- CSS border triangles have no elm-ui equivalent, so html is used only here.
+            , html <|
+                Html.div
+                    [ Html.Attributes.style "width" "0"
+                    , Html.Attributes.style "height" "0"
+                    , Html.Attributes.style "border-left" "10px solid transparent"
+                    , Html.Attributes.style "border-right" "10px solid transparent"
+                    , Html.Attributes.style "border-top" "12px solid #333"
+                    , Html.Attributes.style "margin-left" "calc(50% - 10px)"
+                    ]
+                    []
+            , html <|
+                Html.div
+                    [ Html.Attributes.style "width" "0"
+                    , Html.Attributes.style "height" "0"
+                    , Html.Attributes.style "border-left" "8px solid transparent"
+                    , Html.Attributes.style "border-right" "8px solid transparent"
+                    , Html.Attributes.style "border-top" "10px solid white"
+                    , Html.Attributes.style "margin-left" "calc(50% - 8px)"
+                    , Html.Attributes.style "margin-top" "-13px"
+                    ]
+                    []
+            ]
 
 
+
+-- Debug overlay: shows SVG coordinates next to the mouse cursor.
+
+
+viewCursorLabel : Model -> Element msg
+viewCursorLabel model =
+    let
+        vp =
+            viewportGeometry (mapContext model)
+
+        pctX =
+            (model.mouseX - vp.offsetX) / vp.zoomedWidth * 100
+
+        pctY =
+            (model.mouseY - vp.offsetY) / vp.zoomedHeight * 100
+
+        labelText =
+            "(" ++ String.fromInt (round model.mouseX) ++ ", " ++ String.fromInt (round model.mouseY) ++ ")"
+    in
+    el
+        [ htmlAttribute <| Html.Attributes.style "position" "absolute"
+        , htmlAttribute <| Html.Attributes.style "left" (String.fromFloat pctX ++ "%")
+        , htmlAttribute <| Html.Attributes.style "top" (String.fromFloat pctY ++ "%")
+        , htmlAttribute <| Html.Attributes.style "transform" "translate(12px, -50%)"
+        , htmlAttribute <| Html.Attributes.style "pointer-events" "none"
+        , Font.size 11
+        , Font.family [ Font.monospace ]
+        , htmlAttribute <| Html.Attributes.style "white-space" "nowrap"
+        , Background.color (rgba 1 1 1 0.75)
+        , paddingXY 4 1
+        , Border.rounded 3
+        ]
+        (text labelText)
+
+
+viewLabel : MapContext -> Bool -> Calibration -> Label -> Element msg
+viewLabel ctx showDots calib label =
+    let
+        vp =
+            viewportGeometry ctx
+
+        ( svgX, svgY ) =
+            latLngToSvgXY label.lat label.lng calib
+
+        pctX =
+            (svgX - vp.offsetX) / vp.zoomedWidth * 100
+
+        pctY =
+            (svgY - vp.offsetY) / vp.zoomedHeight * 100
+
+        pos =
+            [ htmlAttribute <| Html.Attributes.style "position" "absolute"
+            , htmlAttribute <| Html.Attributes.style "left" (String.fromFloat pctX ++ "%")
+            , htmlAttribute <| Html.Attributes.style "top" (String.fromFloat pctY ++ "%")
+            , htmlAttribute <| Html.Attributes.style "transform" "translate(-50%, -50%)"
+            , htmlAttribute <| Html.Attributes.style "pointer-events" "none"
+            ]
+    in
+    if showDots then
+        el
+            (pos
+                ++ [ width (px 6)
+                   , height (px 6)
+                   , Border.rounded 3
+                   , Background.color (rgb 1 0 0)
+                   ]
+            )
+            none
+
+    else
+        el
+            (pos
+                ++ [ Font.size 12
+                   , Font.bold
+                   , htmlAttribute <| Html.Attributes.style "white-space" "nowrap"
+                   , htmlAttribute <| Html.Attributes.style "text-shadow" "0 0 3px white, 0 0 3px white, 0 0 3px white"
+                   ]
+            )
+            (text label.content)
+
+
+footer : Element msg
 footer =
     paragraph
         [ Font.size 60
@@ -723,33 +708,34 @@ footer =
         -- , htmlAttribute <| Html.Attributes.style "text-shadow" "0px 0px 0 brown"
         , htmlAttribute <| Html.Attributes.style "pointer-events" "none"
         ]
-        [ text "Map of Rock"
+        [ text "Elm Test Map"
         ]
 
 
-calibSlider : String -> Float -> Float -> Float -> (Float -> Msg) -> Element Msg
-calibSlider label_ min_ max_ value_ msg =
+calibSlider : SliderConfig -> Element Msg
+calibSlider config =
     column
         [ spacing 3
         , htmlAttribute <| Html.Attributes.style "pointer-events" "auto"
         ]
-        [ el [ Font.size 10, centerX ] <| text (label_ ++ ": " ++ String.fromFloat value_)
+        [ el [ Font.size 10, centerX ] <| text (config.label ++ ": " ++ String.fromFloat config.value)
         , Input.slider
             [ width (px 120)
             , Element.behindContent
                 (el [ width fill, height (px 2), centerY, Background.color (rgb 0.5 0.5 0.5), rounded 2 ] none)
             ]
-            { onChange = msg
-            , label = Input.labelHidden label_
-            , min = min_
-            , max = max_
+            { onChange = config.onChange
+            , label = Input.labelHidden config.label
+            , min = config.min
+            , max = config.max
             , step = Nothing
-            , value = value_
+            , value = config.value
             , thumb = Input.defaultThumb
             }
         ]
 
 
+header : Model -> Element Msg
 header model =
     wrappedRow
         [ spacing 10
@@ -796,10 +782,10 @@ header model =
                         "Dots OFF"
                     )
             }
-        , calibSlider "X offset" -200 200 model.calibX SetCalibX
-        , calibSlider "Y offset" -200 200 model.calibY SetCalibY
-        , calibSlider "X scale" 0.5 2.0 model.calibScaleX SetCalibScaleX
-        , calibSlider "Y scale" 0.5 2.0 model.calibScaleY SetCalibScaleY
+        , calibSlider { label = "X offset", min = -200, max = 200, value = model.calibX, onChange = SetCalibX }
+        , calibSlider { label = "Y offset", min = -200, max = 200, value = model.calibY, onChange = SetCalibY }
+        , calibSlider { label = "X scale", min = 0.5, max = 2.0, value = model.calibScaleX, onChange = SetCalibScaleX }
+        , calibSlider { label = "Y scale", min = 0.5, max = 2.0, value = model.calibScaleY, onChange = SetCalibScaleY }
         , row [ spacing 10, padding 5 ]
             [ Input.button attrsButton { onPress = Just PanLeft, label = text "←" }
             , column [ spacing 5 ]
@@ -889,6 +875,25 @@ subscriptions model =
     Sub.batch (dragSubs ++ inertiaSub ++ [ Browser.Events.onResize Resize ])
 
 
+mapContext : Model -> MapContext
+mapContext model =
+    { zoom = model.zoom
+    , panX = model.panX
+    , panY = model.panY
+    , containerW = model.containerW
+    , containerH = model.containerH
+    }
+
+
+calibration : Model -> Calibration
+calibration model =
+    { x = model.calibX
+    , y = model.calibY
+    , scaleX = model.calibScaleX
+    , scaleY = model.calibScaleY
+    }
+
+
 uk : Model -> Model
 uk model =
     { model | zoom = 3.3, panX = -519, panY = -973 }
@@ -919,59 +924,22 @@ main =
         }
 
 
-svg : Float -> Float -> Float -> Float -> Float -> Html msg
-svg zoom panX panY containerWidth containerHeight =
+svg : MapContext -> Html msg
+svg ctx =
     -- Converted with https://html-to-elm.com/
     let
-        baseWidth =
-            2000
-
-        baseHeight =
-            1280
-
         scale =
-            2 ^ zoom
+            2 ^ ctx.zoom
 
-        mapAspect =
-            baseWidth / baseHeight
-
-        containerAspect =
-            if containerHeight > 0 then
-                containerWidth / containerHeight
-
-            else
-                mapAspect
-
-        -- Fill height when portrait, fill width when landscape
-        ( zoomedWidth, zoomedHeight ) =
-            if containerAspect < mapAspect then
-                -- Portrait: constrain by height, crop left/right
-                let
-                    h =
-                        baseHeight / scale
-                in
-                ( h * containerAspect, h )
-
-            else
-                -- Landscape: constrain by width, crop top/bottom (original behavior)
-                let
-                    w =
-                        baseWidth / scale
-                in
-                ( w, w / containerAspect )
-
-        offsetX =
-            (baseWidth - zoomedWidth) / 2 + panX / scale
-
-        offsetY =
-            (baseHeight - zoomedHeight) / 2 + panY / scale
+        vp =
+            viewportGeometry ctx
 
         viewBoxValue =
             String.join " "
-                [ String.fromFloat offsetX
-                , String.fromFloat offsetY
-                , String.fromFloat zoomedWidth
-                , String.fromFloat zoomedHeight
+                [ String.fromFloat vp.offsetX
+                , String.fromFloat vp.offsetY
+                , String.fromFloat vp.zoomedWidth
+                , String.fromFloat vp.zoomedHeight
                 ]
 
         style1 =
