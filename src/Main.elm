@@ -417,6 +417,12 @@ cards =
       , description = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. In et dolor porta, tristique orci at, tempus nibh. Ut ac gravida turpis."
       , minZoom = 2.2
       }
+    , { lat = 35.6292030854605
+      , lng = 139.70164979536167
+      , title = "Meguro Rock"
+      , description = "Some other text"
+      , minZoom = 2.2
+      }
     , { lat = 45
       , lng = 1
       , title = "Card 3"
